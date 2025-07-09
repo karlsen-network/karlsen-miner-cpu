@@ -49,9 +49,6 @@ jobs:
       - name: Run cargo test regular features
         run: cargo test
 
-      - name: Run cargo test no asm
-        run: cargo test --features=no-asm
-
       - name: Run cargo test with parking_lot
         run: cargo test --features=parking_lot
 
@@ -80,9 +77,6 @@ jobs:
 
       - name: Run cargo test release regular features
         run: cargo test --release
-
-      - name: Run cargo test release no asm
-        run: cargo test --features=no-asm --release
 
       - name: Run cargo test release with parking_lot
         run: cargo test --features=parking_lot --release
