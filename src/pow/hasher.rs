@@ -421,3 +421,56 @@ impl Hasher for HeaderHasher {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::pow::hasher::{PowB3Hash, PowFishHash, FISHHASH_FULL_DATASET};
+    use crate::Hash;
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn test_powb3hash() {
+        let timestamp: u64 = 5435345234;
+        let nonce: u64 = 432432432;
+        let pre_pow_hash = Hash::from_le_bytes([42; 32]);
+
+        let hasher = PowB3Hash::new(pre_pow_hash, timestamp);
+        let hash1 = hasher.finalize_with_nonce(nonce);
+
+        let expected_hash1 = "f0afbcd9401f24cf8374418e391e1458a6df7645441dd5dc9cfe8dc9e761e67d";
+        assert_eq!(format!("{:x}", hash1), expected_hash1, "PowB3Hash output changed!");
+    }
+
+    #[test]
+    #[ignore] // this is expensive to run
+    fn test_khashv2() {
+        // avoid dataset building
+        FISHHASH_FULL_DATASET.store(false, Ordering::Relaxed);
+
+        let timestamp: u64 = 5435345234;
+        let nonce: u64 = 432432432;
+        let pre_pow_hash = Hash::from_le_bytes([42; 32]);
+
+        // Step 1: PowB3Hash (PRE_POW_HASH || TIME || 32 zero padding || NONCE)
+        let hasher = PowB3Hash::new(pre_pow_hash, timestamp);
+        let hash1 = hasher.finalize_with_nonce(nonce);
+        println!("hash-1 : {:x}", hash1);
+
+        let expected_hash1 = "f0afbcd9401f24cf8374418e391e1458a6df7645441dd5dc9cfe8dc9e761e67d";
+        assert_eq!(format!("{:x}", hash1), expected_hash1, "Step 1 PowB3Hash output changed!");
+
+        // Step 2: PowFishHash
+        let hash2 = PowFishHash::fishhashplus_kernel(&hash1);
+        println!("hash-2 : {:x}", hash2);
+
+        let expected_hash2 = "f57e96fd7fef6accc5daacc9eaa1d012f9145da61488d884a8fa4ce6b57288be";
+        assert_eq!(format!("{:x}", hash2), expected_hash2, "Step 2 FishHash output changed!");
+
+        // Step 3: Final B3 hash
+        let hash3 = PowB3Hash::hash(hash2);
+        println!("hash-3 : {:x}", hash3);
+
+        let expected_hash3 = "71e8a7ff50f4eba67fbf00af449c12e6e74b1edfc1577b59c41c77922e546f87";
+        assert_eq!(format!("{:x}", hash3), expected_hash3, "Step 3 final PowB3Hash output changed!");
+    }
+}
