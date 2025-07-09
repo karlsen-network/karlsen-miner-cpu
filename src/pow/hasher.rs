@@ -166,7 +166,7 @@ impl HashData for Hash256 {
 
     #[inline(always)]
     fn from_hash(hash: &Hash) -> Self {
-        Self(hash.to_le_bytes().try_into().unwrap())
+        Self(hash.to_le_bytes())
     }
 
     #[inline(always)]
