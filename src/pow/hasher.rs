@@ -1,7 +1,6 @@
 #![allow(clippy::unreadable_literal)]
 use crate::Hash;
 use blake2b_simd::State as Blake2bState;
-use lazy_static::lazy_static;
 use log::info;
 use std::ops::BitXor;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -18,6 +17,11 @@ pub struct PowB3Hash {
 #[derive(Clone)]
 pub struct PowFishHash;
 
+struct FishHashContext {
+    light_cache: Box<[Hash512]>,
+    full_dataset: Option<Box<[Hash1024]>>,
+}
+
 // fishhash const
 const FNV_PRIME: u32 = 0x01000193;
 const FULL_DATASET_ITEM_PARENTS: u32 = 512;
@@ -25,9 +29,13 @@ const NUM_DATASET_ACCESSES: u32 = 32;
 const LIGHT_CACHE_ROUNDS: i32 = 3;
 const LIGHT_CACHE_NUM_ITEMS: u32 = 1179641;
 const FULL_DATASET_NUM_ITEMS: u32 = 37748717;
+
+#[rustfmt::skip]
 const SEED: Hash256 = Hash256([
-    0xeb, 0x01, 0x63, 0xae, 0xf2, 0xab, 0x1c, 0x5a, 0x66, 0x31, 0x0c, 0x1c, 0x14, 0xd6, 0x0f, 0x42, 0x55, 0xa9, 0xb3,
-    0x9b, 0x0e, 0xdf, 0x26, 0x53, 0x98, 0x44, 0xf1, 0x17, 0xad, 0x67, 0x21, 0x19,
+    0xeb, 0x01, 0x63, 0xae, 0xf2, 0xab, 0x1c, 0x5a, 
+    0x66, 0x31, 0x0c, 0x1c, 0x14, 0xd6, 0x0f, 0x42, 
+    0x55, 0xa9, 0xb3, 0x9b, 0x0e, 0xdf, 0x26, 0x53, 
+    0x98, 0x44, 0xf1, 0x17, 0xad, 0x67, 0x21, 0x19,
 ]);
 
 const SIZE_U32: usize = std::mem::size_of::<u32>();
@@ -35,15 +43,7 @@ const SIZE_U64: usize = std::mem::size_of::<u64>();
 
 // always build dag
 pub static FISHHASH_FULL_DATASET: AtomicBool = AtomicBool::new(true);
-static FULL_DATASET: OnceLock<Box<[Hash1024]>> = OnceLock::new();
-
-lazy_static! {
-    static ref LIGHT_CACHE: Box<[Hash512]> = {
-        let mut light_cache = vec![Hash512::new(); LIGHT_CACHE_NUM_ITEMS as usize].into_boxed_slice();
-        PowFishHash::build_light_cache(&mut light_cache);
-        light_cache
-    };
-}
+static CONTEXT: OnceLock<FishHashContext> = OnceLock::new();
 
 #[derive(Clone)]
 pub struct HeaderHasher(Blake2bState);
@@ -181,16 +181,25 @@ impl HashData for Hash256 {
 }
 
 #[inline(always)]
-fn get_dataset_item(index: usize) -> Hash1024 {
-    if FISHHASH_FULL_DATASET.load(Ordering::Relaxed) {
-        let dataset = FULL_DATASET.get_or_init(|| {
+fn lookup(index: usize) -> Hash1024 {
+    let context = CONTEXT.get_or_init(|| {
+        let mut light_cache = vec![Hash512::new(); LIGHT_CACHE_NUM_ITEMS as usize].into_boxed_slice();
+        PowFishHash::build_light_cache(&mut light_cache);
+
+        let full_dataset = if FISHHASH_FULL_DATASET.load(Ordering::Relaxed) {
             let mut full_dataset = vec![Hash1024::new(); FULL_DATASET_NUM_ITEMS as usize].into_boxed_slice();
-            prebuild_dataset(&mut full_dataset, &LIGHT_CACHE, num_cpus::get_physical());
-            full_dataset
-        });
-        dataset[index]
-    } else {
-        PowFishHash::calculate_dataset_item_1024(&LIGHT_CACHE, index)
+            prebuild_dataset(&mut full_dataset, &light_cache, num_cpus::get());
+            Some(full_dataset)
+        } else {
+            None
+        };
+
+        FishHashContext { light_cache, full_dataset }
+    });
+
+    match &context.full_dataset {
+        Some(dataset) => dataset[index],
+        None => PowFishHash::calculate_dataset_item_1024(&context.light_cache, index),
     }
 }
 
@@ -240,6 +249,7 @@ impl PowFishHash {
         let mut mix = Hash1024::from_512s(&seed_hash512, &seed_hash512);
 
         for i in 0..NUM_DATASET_ACCESSES {
+            // Calculate new fetching indexes
             let mut mix_group: [u32; 8] = [0; 8];
 
             for (c, mix_group_elem) in mix_group.iter_mut().enumerate() {
@@ -253,9 +263,9 @@ impl PowFishHash {
             let p1 = (mix_group[1] ^ mix_group[4] ^ mix_group[7]) % FULL_DATASET_NUM_ITEMS;
             let p2 = (mix_group[2] ^ mix_group[5] ^ i) % FULL_DATASET_NUM_ITEMS;
 
-            let fetch0 = get_dataset_item(p0 as usize);
-            let mut fetch1 = get_dataset_item(p1 as usize);
-            let mut fetch2 = get_dataset_item(p2 as usize);
+            let fetch0 = lookup(p0 as usize);
+            let mut fetch1 = lookup(p1 as usize);
+            let mut fetch2 = lookup(p2 as usize);
 
             // Modify fetch1 and fetch2
             for j in 0..32 {
@@ -288,6 +298,7 @@ impl PowFishHash {
 
     #[inline(always)]
     fn build_light_cache(cache: &mut [Hash512]) {
+        info!("light cache processing started");
         let mut item: Hash512 = Hash512::new();
         PowFishHash::keccak(&mut item.0, &SEED.0);
         cache[0] = item;
@@ -299,14 +310,20 @@ impl PowFishHash {
 
         for _ in 0..LIGHT_CACHE_ROUNDS {
             for i in 0..LIGHT_CACHE_NUM_ITEMS {
+                // First index: 4 first bytes of the item as little-endian integer
                 let t: u32 = cache[i as usize].get_as_u32(0);
                 let v: u32 = t % LIGHT_CACHE_NUM_ITEMS;
+
+                // Second index
                 let w: u32 = (LIGHT_CACHE_NUM_ITEMS.wrapping_add(i.wrapping_sub(1))) % LIGHT_CACHE_NUM_ITEMS;
 
                 let x = &cache[v as usize] ^ &cache[w as usize];
                 PowFishHash::keccak(&mut cache[i as usize].0, &x.0);
             }
         }
+        info!("light_cache[10] : {:?}", cache[10]);
+        info!("light_cache[42] : {:?}", cache[42]);
+        info!("light cache processing done");
     }
 
     #[inline(always)]
@@ -437,8 +454,43 @@ mod tests {
         let hasher = PowB3Hash::new(pre_pow_hash, timestamp);
         let hash1 = hasher.finalize_with_nonce(nonce);
 
-        let expected_hash1 = "f0afbcd9401f24cf8374418e391e1458a6df7645441dd5dc9cfe8dc9e761e67d";
-        assert_eq!(format!("{:x}", hash1), expected_hash1, "PowB3Hash output changed!");
+        #[rustfmt::skip]
+        let expected_hash1 = [
+            0xf0, 0xaf, 0xbc, 0xd9, 0x40, 0x1f, 0x24, 0xcf,
+            0x83, 0x74, 0x41, 0x8e, 0x39, 0x1e, 0x14, 0x58,
+            0xa6, 0xdf, 0x76, 0x45, 0x44, 0x1d, 0xd5, 0xdc,
+            0x9c, 0xfe, 0x8d, 0xc9, 0xe7, 0x61, 0xe6, 0x7d
+        ];
+
+        println!("hash1: {:?}", hash1.to_le_bytes());
+        assert_eq!(hash1.to_le_bytes(), expected_hash1, "PowB3Hash output changed!");
+    }
+
+    #[test]
+    fn test_powfishhash() {
+        FISHHASH_FULL_DATASET.store(false, Ordering::Relaxed);
+
+        // B3 hash as input to PowFishHash
+        #[rustfmt::skip]
+        let input_hash = Hash::from_le_bytes([
+            0xf0, 0xaf, 0xbc, 0xd9, 0x40, 0x1f, 0x24, 0xcf, 
+            0x83, 0x74, 0x41, 0x8e, 0x39, 0x1e, 0x14, 0x58, 
+            0xa6, 0xdf, 0x76, 0x45, 0x44, 0x1d, 0xd5, 0xdc, 
+            0x9c, 0xfe, 0x8d, 0xc9, 0xe7, 0x61, 0xe6, 0x7d,
+        ]);
+
+        let fishhash_output = PowFishHash::fishhashplus_kernel(&input_hash);
+
+        #[rustfmt::skip]
+        let expected_fishhash = [
+            0xf5, 0x7e, 0x96, 0xfd, 0x7f, 0xef, 0x6a, 0xcc,
+            0xc5, 0xda, 0xac, 0xc9, 0xea, 0xa1, 0xd0, 0x12,
+            0xf9, 0x14, 0x5d, 0xa6, 0x14, 0x88, 0xd8, 0x84,
+            0xa8, 0xfa, 0x4c, 0xe6, 0xb5, 0x72, 0x88, 0xbe
+        ];
+
+        println!("fishhash output: {:?}", fishhash_output.to_le_bytes());
+        assert_eq!(fishhash_output.to_le_bytes(), expected_fishhash, "FishHash output changed!");
     }
 
     #[test]
@@ -454,23 +506,44 @@ mod tests {
         // Step 1: PowB3Hash (PRE_POW_HASH || TIME || 32 zero padding || NONCE)
         let hasher = PowB3Hash::new(pre_pow_hash, timestamp);
         let hash1 = hasher.finalize_with_nonce(nonce);
-        println!("hash-1 : {:x}", hash1);
 
-        let expected_hash1 = "f0afbcd9401f24cf8374418e391e1458a6df7645441dd5dc9cfe8dc9e761e67d";
-        assert_eq!(format!("{:x}", hash1), expected_hash1, "Step 1 PowB3Hash output changed!");
+        #[rustfmt::skip]
+        let expected_hash1 = [
+            0xf0, 0xaf, 0xbc, 0xd9, 0x40, 0x1f, 0x24, 0xcf,
+            0x83, 0x74, 0x41, 0x8e, 0x39, 0x1e, 0x14, 0x58,
+            0xa6, 0xdf, 0x76, 0x45, 0x44, 0x1d, 0xd5, 0xdc,
+            0x9c, 0xfe, 0x8d, 0xc9, 0xe7, 0x61, 0xe6, 0x7d
+        ];
+
+        println!("hash1: {:?}", hash1.to_le_bytes());
+        assert_eq!(hash1.to_le_bytes(), expected_hash1, "Step 1 PowB3Hash output changed!");
 
         // Step 2: PowFishHash
         let hash2 = PowFishHash::fishhashplus_kernel(&hash1);
-        println!("hash-2 : {:x}", hash2);
 
-        let expected_hash2 = "f57e96fd7fef6accc5daacc9eaa1d012f9145da61488d884a8fa4ce6b57288be";
-        assert_eq!(format!("{:x}", hash2), expected_hash2, "Step 2 FishHash output changed!");
+        #[rustfmt::skip]
+        let expected_hash2 = [
+            0xf5, 0x7e, 0x96, 0xfd, 0x7f, 0xef, 0x6a, 0xcc,
+            0xc5, 0xda, 0xac, 0xc9, 0xea, 0xa1, 0xd0, 0x12,
+            0xf9, 0x14, 0x5d, 0xa6, 0x14, 0x88, 0xd8, 0x84,
+            0xa8, 0xfa, 0x4c, 0xe6, 0xb5, 0x72, 0x88, 0xbe
+        ];
+
+        println!("hash2: {:?}", hash2.to_le_bytes());
+        assert_eq!(hash2.to_le_bytes(), expected_hash2, "Step 2 FishHash output changed!");
 
         // Step 3: Final B3 hash
         let hash3 = PowB3Hash::hash(hash2);
-        println!("hash-3 : {:x}", hash3);
 
-        let expected_hash3 = "71e8a7ff50f4eba67fbf00af449c12e6e74b1edfc1577b59c41c77922e546f87";
-        assert_eq!(format!("{:x}", hash3), expected_hash3, "Step 3 final PowB3Hash output changed!");
+        #[rustfmt::skip]
+        let expected_hash3 = [
+            0x71, 0xe8, 0xa7, 0xff, 0x50, 0xf4, 0xeb, 0xa6,
+            0x7f, 0xbf, 0x00, 0xaf, 0x44, 0x9c, 0x12, 0xe6,
+            0xe7, 0x4b, 0x1e, 0xdf, 0xc1, 0x57, 0x7b, 0x59,
+            0xc4, 0x1c, 0x77, 0x92, 0x2e, 0x54, 0x6f, 0x87
+        ];
+
+        println!("hash3: {:?}", hash3.to_le_bytes());
+        assert_eq!(hash3.to_le_bytes(), expected_hash3, "Step 3 final PowB3Hash output changed!");
     }
 }
