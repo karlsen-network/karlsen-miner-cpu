@@ -1,4 +1,4 @@
-pub use crate::pow::hasher::HeaderHasher;
+pub use crate::pow::hasher::{FishHashContext, HeaderHasher};
 use crate::{
     pow::hasher::{Hasher, PowB3Hash, PowFishHash},
     proto::{RpcBlock, RpcBlockHeader},
@@ -37,11 +37,11 @@ impl State {
 
     #[inline(always)]
     /// PRE_POW_HASH || TIME || 32 zero byte padding || NONCE
-    pub fn calculate_khashv2(&self) -> Uint256 {
+    pub fn calculate_khashv2(&self, context: &FishHashContext) -> Uint256 {
         // Hasher already contains PRE_POW_HASH || TIME || 32 zero byte padding; so only the NONCE is missing
         let hash = self.hasher.clone().finalize_with_nonce(self.nonce);
         // println!("hash-1 : {:?}", hash);
-        let hash = PowFishHash::fishhashplus_kernel(&hash);
+        let hash = PowFishHash::fishhashplus_kernel(&hash, context);
         // println!("hash-2 : {:?}", hash);
         // last b3 hash
         let hash = PowB3Hash::hash(hash);
@@ -51,9 +51,9 @@ impl State {
 
     #[inline(always)]
     /// PRE_POW_HASH || TIME || 32 zero byte padding || NONCE
-    pub fn calculate_pow(&self) -> Uint256 {
+    pub fn calculate_pow(&self, context: &FishHashContext) -> Uint256 {
         match self.header_version {
-            2 => self.calculate_khashv2(),
+            2 => self.calculate_khashv2(context),
             _ => unreachable!(
                 "wrong header_version, got: {} but expected 2. This miner only supports mining khashv2.",
                 self.header_version
@@ -62,15 +62,15 @@ impl State {
     }
 
     #[inline(always)]
-    pub fn check_pow(&self) -> bool {
-        let pow = self.calculate_pow();
+    pub fn check_pow(&self, context: &FishHashContext) -> bool {
+        let pow = self.calculate_pow(context);
         // The pow hash must be less or equal than the claimed target.
         pow <= self.target
     }
 
     #[inline(always)]
-    pub fn generate_block_if_pow(&self) -> Option<RpcBlock> {
-        self.check_pow().then(|| {
+    pub fn generate_block_if_pow(&self, context: &FishHashContext) -> Option<RpcBlock> {
+        self.check_pow(context).then(|| {
             let mut block = self.block.clone();
             let header = block.header.as_mut().expect("We checked that a header exists on creation");
             header.nonce = self.nonce;

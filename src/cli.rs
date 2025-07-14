@@ -47,6 +47,9 @@ pub struct Opt {
     #[clap(long, display_order = 11)]
     /// Output logs in alternative format (same as karlsend)
     pub altlogs: bool,
+    #[clap(long = "no-full-dataset", display_order = 12)]
+    /// Disable full dataset prebuilding (~4.6GB). Uses light cache only, slower but less memory [default: false]
+    pub no_full_dataset: bool,
 }
 
 fn parse_devfund_percent(s: &str) -> Result<u16, &'static str> {

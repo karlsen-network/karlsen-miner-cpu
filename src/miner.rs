@@ -1,5 +1,5 @@
 use crate::{
-    pow,
+    pow::{self, FishHashContext},
     proto::{KarlsendRequest, RpcBlock},
     swap_rust::WatchSwap,
     Error, ShutdownHandler,
@@ -54,7 +54,9 @@ impl MinerManager {
         throttle: Option<Duration>,
         shutdown: ShutdownHandler,
         mine_when_not_synced: bool,
+        use_full_dataset: bool,
     ) -> Self {
+        let context = Arc::new(FishHashContext::new(use_full_dataset, None));
         let hashes_tried = Arc::new(AtomicU64::new(0));
         let watch = WatchSwap::empty();
         let handles = Self::launch_cpu_threads(
@@ -64,6 +66,7 @@ impl MinerManager {
             shutdown,
             n_cpus,
             throttle,
+            context,
         )
         .collect();
 
@@ -85,6 +88,7 @@ impl MinerManager {
         shutdown: ShutdownHandler,
         n_cpus: Option<u16>,
         throttle: Option<Duration>,
+        context: Arc<FishHashContext>,
     ) -> impl Iterator<Item = MinerHandler> {
         let n_cpus = get_num_cpus(n_cpus);
         info!("Launching: {} cpu miners", n_cpus);
@@ -95,6 +99,7 @@ impl MinerManager {
                 hashes_tried.clone(),
                 throttle,
                 shutdown.clone(),
+                context.clone(),
             )
         })
     }
@@ -128,6 +133,7 @@ impl MinerManager {
         hashes_tried: Arc<AtomicU64>,
         throttle: Option<Duration>,
         shutdown: ShutdownHandler,
+        context: Arc<FishHashContext>,
     ) -> MinerHandler {
         // We mark it cold as the function is not called often, and it's not in the hot path
         #[cold]
@@ -151,7 +157,7 @@ impl MinerManager {
                 };
                 state_ref.nonce = nonce.0;
 
-                if let Some(block) = state_ref.generate_block_if_pow() {
+                if let Some(block) = state_ref.generate_block_if_pow(&context) {
                     found_block(&send_channel, block)?;
                 }
                 nonce += Wrapping(1);
@@ -216,6 +222,7 @@ mod benches {
 
     #[bench]
     pub fn bench_mining(bh: &mut Bencher) {
+        let context = FishHashContext::new(false, None); // use light cache
         let mut state = State::new(
             1,
             RpcBlock {
@@ -242,7 +249,7 @@ mod benches {
         state.nonce = rng().next_u64();
         bh.iter(|| {
             for _ in 0..100 {
-                black_box(state.check_pow());
+                black_box(state.check_pow(&context));
                 state.nonce += 1;
             }
         });

@@ -92,6 +92,7 @@ async fn main() -> Result<(), Error> {
                     throttle,
                     shutdown.clone(),
                     opt.mine_when_not_synced,
+                    !opt.no_full_dataset,
                 );
                 if let Some(devfund_address) = &opt.devfund_address {
                     client.add_devfund(devfund_address.clone(), opt.devfund_percent);
