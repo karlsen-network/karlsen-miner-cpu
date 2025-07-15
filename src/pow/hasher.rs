@@ -173,8 +173,8 @@ impl FishHashContext {
     ///
     /// * `full` - whether to build the full dataset or just the light cache
     /// * `seed` - the seed to use for the light cache. If None, the default seed is used.
-    /// The FishHash specification is to always use the default seed but the option is
-    /// still provided for potential future use cases like rotating the cache.
+    ///   The FishHash specification is to always use the default seed but the option is
+    ///   still provided for potential future use cases like rotating the cache.
     pub fn new(full: bool, seed: Option<[u8; 32]>) -> Self {
         // Vec into boxed sliced, because you can't allocate an array directly on
         // the heap in rust
