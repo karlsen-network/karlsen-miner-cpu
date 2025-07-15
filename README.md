@@ -53,6 +53,8 @@ Options:
           Throttle (milliseconds) between each pow hash generation (used for development testing)
       --altlogs
           Output logs in alternative format (same as karlsend)
+      --no-full-dataset
+          Disable full dataset prebuilding (~4.6GB). Uses light cache only (~75MB). [default: false]
   -h, --help
           Print help
   -V, --version
