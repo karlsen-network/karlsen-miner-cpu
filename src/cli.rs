@@ -48,7 +48,7 @@ pub struct Opt {
     /// Output logs in alternative format (same as karlsend)
     pub altlogs: bool,
     #[clap(long = "no-full-dataset", display_order = 12)]
-    /// Disable full dataset prebuilding (~4.6GB). Uses light cache only, slower but less memory [default: false]
+    /// Disable full dataset prebuilding (~4.6GB). Uses light cache only (~75MB). [default: false]
     pub no_full_dataset: bool,
 }
 
