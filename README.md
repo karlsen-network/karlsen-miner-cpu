@@ -1,4 +1,8 @@
 # karlsen-miner-cpu
+
+[![Build Status](https://github.com/karlsen-network/karlsen-miner-cpu/actions/workflows/ci.yaml/badge.svg)](https://github.com/karlsen-network/karlsen-miner-cpu/actions/workflows/ci.yaml)
+[![GitHub release](https://img.shields.io/github/v/release/karlsen-network/karlsen-miner-cpu.svg)](https://github.com/karlsen-network/karlsen-miner-cpu/releases)
+[![GitHub downloads](https://img.shields.io/github/downloads/karlsen-network/karlsen-miner-cpu/total.svg)](https://github.com/karlsen-network/karlsen-miner-cpu/releases)
 [![Join the Karlsen Discord Server](https://img.shields.io/discord/1169939685280337930.svg?label=&logo=discord&logoColor=ffffff)](https://discord.gg/ZPZRvgMJDT)
 
 This is a reference cpu miner for mining karlsenhashv2. 
