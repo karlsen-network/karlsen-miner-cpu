@@ -11,7 +11,7 @@ If you are looking to build from the repository (for debug / extension), note th
 packages in the workspace. To compile a specific package, you run the following command or any subset of it
 
 ```sh
-git clone https://github.com/Leon1777/karlsen-miner-cpu.git
+git clone https://github.com/karlsen-network/karlsen-miner-cpu.git
 cd karlsen-miner-cpu
 cargo build --release
 ```
