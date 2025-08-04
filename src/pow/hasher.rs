@@ -172,10 +172,11 @@ impl FishHashContext {
     /// # Arguments
     ///
     /// * `full` - whether to build the full dataset or just the light cache
+    /// * `lazy` - computes items on first access and cached for subsequent lookups.
     /// * `seed` - the seed to use for the light cache. If None, the default seed is used.
     ///   The FishHash specification is to always use the default seed but the option is
     ///   still provided for potential future use cases like rotating the cache.
-    pub fn new(full: bool, seed: Option<[u8; 32]>) -> Self {
+    pub fn new(full: bool, lazy: bool, seed: Option<[u8; 32]>) -> Self {
         // Vec into boxed sliced, because you can't allocate an array directly on
         // the heap in rust
         // https://stackoverflow.com/questions/25805174/creating-a-fixed-size-array-on-heap-in-rust/68122278#68122278
@@ -184,9 +185,15 @@ impl FishHashContext {
         build_light_cache(&mut light_cache, seed.unwrap_or(SEED));
 
         let full_dataset = if full {
-            let mut dataset = vec![Hash1024::new(); FULL_DATASET_NUM_ITEMS as usize].into_boxed_slice();
-            Self::prebuild_full_dataset(&mut dataset, &light_cache, num_cpus::get());
-            Some(dataset)
+            let dataset = vec![Hash1024::new(); FULL_DATASET_NUM_ITEMS as usize].into_boxed_slice();
+            if lazy {
+                info!("lazily building dataset...");
+                Some(dataset) // allocate, don't prebuild
+            } else {
+                let mut dataset = dataset;
+                Self::prebuild_full_dataset(&mut dataset, &light_cache, num_cpus::get());
+                Some(dataset)
+            }
         } else {
             None
         };
@@ -491,7 +498,7 @@ mod tests {
 
     #[test]
     fn test_powfishhash() {
-        let mut context = FishHashContext::new(false, None);
+        let mut context = FishHashContext::new(false, false, None);
         // B3 hash as input to PowFishHash
         #[rustfmt::skip]
         let input_hash = Hash::from_le_bytes([
@@ -519,7 +526,7 @@ mod tests {
     #[ignore] // this is expensive to run
     fn test_khashv2() {
         // avoid dataset building
-        let mut context = FishHashContext::new(false, None);
+        let mut context = FishHashContext::new(false, false, None);
 
         let timestamp: u64 = 5435345234;
         let nonce: u64 = 432432432;

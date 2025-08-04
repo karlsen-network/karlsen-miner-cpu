@@ -55,8 +55,9 @@ impl MinerManager {
         shutdown: ShutdownHandler,
         mine_when_not_synced: bool,
         use_full_dataset: bool,
+        lazy_dataset: bool,
     ) -> Self {
-        let context = Arc::new(Mutex::new(FishHashContext::new(use_full_dataset, None)));
+        let context = Arc::new(Mutex::new(FishHashContext::new(use_full_dataset, lazy_dataset, None)));
         let hashes_tried = Arc::new(AtomicU64::new(0));
         let watch = WatchSwap::empty();
         let handles = Self::launch_cpu_threads(
@@ -157,7 +158,7 @@ impl MinerManager {
                 };
                 state_ref.nonce = nonce.0;
 
-                if let Some(block) = state_ref.generate_block_if_pow(&mut *context.lock().unwrap()) {
+                if let Some(block) = state_ref.generate_block_if_pow(&mut context.lock().unwrap()) {
                     found_block(&send_channel, block)?;
                 }
                 nonce += Wrapping(1);
