@@ -50,6 +50,9 @@ pub struct Opt {
     #[clap(long = "no-full-dataset", display_order = 12)]
     /// Disable full dataset prebuilding (~4.6GB). Uses light cache only (~75MB). [default: false]
     pub no_full_dataset: bool,
+    #[clap(long = "lazy-dataset", display_order = 13)]
+    /// Lazily build the dataset on demand. Pre-allocates 4.6GB but only computes items when accessed. Requires --no-full-dataset to be false. [default: false]
+    pub lazy_dataset: bool,
 }
 
 fn parse_devfund_percent(s: &str) -> Result<u16, &'static str> {

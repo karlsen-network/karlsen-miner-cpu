@@ -172,10 +172,11 @@ impl FishHashContext {
     /// # Arguments
     ///
     /// * `full` - whether to build the full dataset or just the light cache
+    /// * `lazy` - computes items on first access and cached for subsequent lookups.
     /// * `seed` - the seed to use for the light cache. If None, the default seed is used.
     ///   The FishHash specification is to always use the default seed but the option is
     ///   still provided for potential future use cases like rotating the cache.
-    pub fn new(full: bool, seed: Option<[u8; 32]>) -> Self {
+    pub fn new(full: bool, lazy: bool, seed: Option<[u8; 32]>) -> Self {
         // Vec into boxed sliced, because you can't allocate an array directly on
         // the heap in rust
         // https://stackoverflow.com/questions/25805174/creating-a-fixed-size-array-on-heap-in-rust/68122278#68122278
@@ -184,9 +185,15 @@ impl FishHashContext {
         build_light_cache(&mut light_cache, seed.unwrap_or(SEED));
 
         let full_dataset = if full {
-            let mut dataset = vec![Hash1024::new(); FULL_DATASET_NUM_ITEMS as usize].into_boxed_slice();
-            Self::prebuild_full_dataset(&mut dataset, &light_cache, num_cpus::get());
-            Some(dataset)
+            let dataset = vec![Hash1024::new(); FULL_DATASET_NUM_ITEMS as usize].into_boxed_slice();
+            if lazy {
+                info!("lazily building dataset...");
+                Some(dataset) // allocate, don't prebuild
+            } else {
+                let mut dataset = dataset;
+                Self::prebuild_full_dataset(&mut dataset, &light_cache, num_cpus::get());
+                Some(dataset)
+            }
         } else {
             None
         };
@@ -292,7 +299,7 @@ pub fn calculate_dataset_item_1024(light_cache: &[Hash512], index: usize) -> Has
 pub struct PowFishHash;
 
 impl PowFishHash {
-    pub fn fishhashplus_kernel(seed: &Hash, context: &FishHashContext) -> Hash {
+    pub fn fishhashplus_kernel(seed: &Hash, context: &mut FishHashContext) -> Hash {
         let seed_hash512 = Hash512::from_hash(seed);
         let mut mix = Hash1024::from_512s(&seed_hash512, &seed_hash512);
 
@@ -346,10 +353,15 @@ impl PowFishHash {
 }
 
 #[inline]
-fn lookup(context: &FishHashContext, index: usize) -> Hash1024 {
-    // removed lazy lookup for now if item.get_as_u64(0) == 0 {
-    match &context.full_dataset {
-        Some(dataset) => dataset[index],
+fn lookup(context: &mut FishHashContext, index: usize) -> Hash1024 {
+    match &mut context.full_dataset {
+        Some(dataset) => {
+            let item = &mut dataset[index];
+            if item.get_as_u64(0) == 0 {
+                *item = calculate_dataset_item_1024(&context.light_cache, index);
+            }
+            *item
+        }
         None => calculate_dataset_item_1024(&context.light_cache, index),
     }
 }
@@ -486,7 +498,7 @@ mod tests {
 
     #[test]
     fn test_powfishhash() {
-        let context = FishHashContext::new(false, None);
+        let mut context = FishHashContext::new(false, false, None);
         // B3 hash as input to PowFishHash
         #[rustfmt::skip]
         let input_hash = Hash::from_le_bytes([
@@ -496,7 +508,7 @@ mod tests {
             0x9c, 0xfe, 0x8d, 0xc9, 0xe7, 0x61, 0xe6, 0x7d,
         ]);
 
-        let fishhash_output = PowFishHash::fishhashplus_kernel(&input_hash, &context);
+        let fishhash_output = PowFishHash::fishhashplus_kernel(&input_hash, &mut context);
 
         #[rustfmt::skip]
         let expected_fishhash = [
@@ -514,7 +526,7 @@ mod tests {
     #[ignore] // this is expensive to run
     fn test_khashv2() {
         // avoid dataset building
-        let context = FishHashContext::new(false, None);
+        let mut context = FishHashContext::new(false, false, None);
 
         let timestamp: u64 = 5435345234;
         let nonce: u64 = 432432432;
@@ -536,7 +548,7 @@ mod tests {
         assert_eq!(hash1.to_le_bytes(), expected_hash1, "Step 1 PowB3Hash output changed!");
 
         // Step 2: PowFishHash
-        let hash2 = PowFishHash::fishhashplus_kernel(&hash1, &context);
+        let hash2 = PowFishHash::fishhashplus_kernel(&hash1, &mut context);
 
         #[rustfmt::skip]
         let expected_hash2 = [
